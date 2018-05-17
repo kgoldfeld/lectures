@@ -1,0 +1,539 @@
+---
+title: "Simulation and race?"
+output:
+  html_notebook: default
+---
+
+```{r message=FALSE, warning=FALSE}
+# Code for plotting densities
+
+getDensity <- function(vector, weights = NULL) {
+  
+  if (!is.vector(vector)) stop("Not a vector!")
+  
+  if (is.null(weights)) {
+    avg <- mean(vector)
+  } else {
+    avg <- weighted.mean(vector, weights)
+  }
+  
+  close <- min(which(avg < density(vector)$x))
+  x <- density(vector)$x[close]
+  if (is.null(weights)) {
+    y = density(vector)$y[close]
+  } else {
+    y = density(vector, weights = weights)$y[close]
+  }
+  return(data.table(x = x, y = y))
+  
+}
+
+plotDens <- function(dtx, var1, var2, xPrefix, title, textL = NULL, textT = NULL, weighted = FALSE) {
+  
+  dt <- copy(dtx)
+  
+  if (weighted) {
+    dt[, nIPW := IPW/sum(IPW)]
+    dMarginal <- getDensity(dt[, get(var1)], weights = dt$nIPW)
+  } else {
+    dMarginal <- getDensity(dt[, get(var1)])
+  }
+  
+  d0 <- getDensity(dt[get(var2)==0, get(var1)])
+  d1 <- getDensity(dt[get(var2)==1, get(var1)])
+
+  dline <- rbind(d0, dMarginal, d1)
+  
+  brk <- round(dline$x, 1)
+  
+  p <- ggplot(aes(x=get(var1)), data=dt) +
+    geom_density(data=dt[get(var2)==0], fill = "#ce682f", alpha = .4) +
+    geom_density(data=dt[get(var2)==1], fill = "#96ce2f", alpha = .4)
+  
+  if (weighted) {
+    p <- p + geom_density(aes(weight = nIPW),
+                              fill = "#2f46ce", alpha = .8)
+  } else p <- p + geom_density(fill = "#2f46ce", alpha = .8)
+  
+  p <- p +  geom_segment(data = dline, aes(x = x, xend = x, 
+                                   y = 0, yend = y), 
+                 size = .5, color =  "white", lty=3) +
+            annotate(geom="text", x = 75, y = .24, 
+               label = title, size = 4, fontface = 2) +
+            scale_x_continuous(limits = c(70, 105), 
+                       breaks = brk,
+                       name = paste(xPrefix, var1)) +
+            theme(panel.grid = element_blank(),
+                  axis.text.x = element_text(size = 7),
+                  axis.title.x = element_text(size = 11)
+    )
+
+    if (!is.null(textL))  {
+      p <- p + 
+        annotate(geom = "text", x = textL[1], y = textL[2], 
+                 label = textT[1], size = 3, fontface = 2) +
+        annotate(geom = "text", x = textL[3], y = textL[4], 
+                 label=textT[2], size = 3, fontface = 2) +
+        annotate(geom = "text", x = textL[5], y = textL[6], 
+                 label="Population distribution", size = 3, fontface = 2)
+    } 
+    
+    return(p)
+}
+```
+
+```{r}
+library(simstudy)
+library(magrittr)
+library(broom)
+library(ggplot2)
+library(gridExtra)
+```
+
+```{r}
+def <- defData(varname = "x1", formula = "1;12", 
+               dist = "uniformInt")
+def <- defData(def, varname="y1", formula = "-0.2 + 0.2 * x1", 
+               dist="poisson", link="log")
+
+def
+
+```
+
+```{r}
+# generate data
+
+set.seed(50)
+
+dt <- genData(1001, def)
+
+head(dt)
+```
+
+```{r}
+lmfit <- lm(y1~x1,data=dt)
+summary(lmfit)
+```
+
+```{r, fig.width = 3}
+dt[, predlm := predict(lmfit)]
+
+ggplot(dt,aes(y=y1,x=x1)) +
+  geom_jitter(width = 0.25, color = "grey60", size = 0.5) +
+  geom_line(aes(x=x1, y=predlm), color = "#0932c0", size = 1) +
+  scale_x_continuous(breaks = c(1:12)) +
+  theme(panel.grid.minor = element_blank())
+```
+
+```{r}
+glmfit <- glm(y1~x1, data=dt, family=poisson(log))
+summary(glmfit)
+```
+
+```{r, fig.width = 3}
+dt[, predglm := predict(glmfit, type = "response")]
+ggplot(dt,aes(y=y1,x=x1)) +
+  geom_jitter(width = 0.25, color = "grey60", size = .5) +
+  geom_line(aes(x=x1, y=predlm), color = "#0932c0", size = 1, alpha = .3) +
+  scale_x_continuous(breaks = c(1:12)) +
+  theme(panel.grid.minor = element_blank()) + 
+  geom_line(aes(x=x1, y=predglm), color = "#c03b09", size = 1)
+```
+
+<!-- Go to slides -->
+
+```{r}
+# confounder
+
+defC <- defData(varname = "confounder", formula = .4, dist = "binary")
+defC <- defData(defC, varname = "exposure", formula = "10 + 5 * confounder", 
+               variance = 4, dist = "normal")
+defC <- defData(defC, varname = "outcome", formula = "2*exposure + 5*confounder", 
+               variance = 3, dist = "normal")
+
+set.seed(10291)
+DTc <- genData(1000, defC)
+
+ggplot(data = DTc, aes(x = exposure, y = outcome)) +
+  geom_point(aes(color = factor(confounder)), size = .5) +
+  scale_color_manual(values = c("#2d80f0", "#f09d2d"), name = "confounder") +
+  theme(panel.grid = element_blank(),
+        legend.position = c(.8,.2)) +
+  xlim(0,25) +
+  ylim(0,60)
+```
+```{r}
+defM <- defData(varname = "exposure", formula = 12, variance = 10, dist = "normal")
+defM <- defData(defM, varname = "mediator", formula = "-16 + 1.25 * exposure", 
+               dist = "binary", link = "logit")
+defM <- defData(defM, varname = "outcome", formula = "2*exposure + 5 * mediator", 
+               variance = 3, dist = "normal")
+
+set.seed(10291)
+DTm <- genData(1000, defM)
+
+ggplot(data = DTm, aes(x = exposure, y = outcome)) +
+  geom_point(aes(color = factor(mediator)), size = .5) +
+  scale_color_manual(values = c("#2d80f0", "#f09d2d"), name = "mediator") +
+  theme(panel.grid = element_blank(),
+        legend.position = c(.8,.2)) +
+  xlim(0,25) +
+  ylim(0,60)
+```
+```{r}
+tidy(lm(outcome ~ exposure + confounder, data = DTc))[, 1:4]
+```
+
+```{r}
+tidy(lm(outcome ~ exposure + mediator, data = DTm))[, 1:4]
+```
+
+<!-- Go to slides -->
+
+```{r}
+defC <- defData(varname = "e", formula = 0, variance = 2, 
+                dist = "normal")
+defC <- defData(defC, varname = "black", formula = 0.3, 
+                dist = "binary")
+defC <- defData(defC, varname = "hyp_0", formula = "90 + 5 * black + e", 
+                dist = "nonrandom")
+defC <- defData(defC, varname = "hyp_1", formula = "80 + 5 * black + e", 
+                dist = "nonrandom")
+defC <- defData(defC, varname = "ACE", formula = "0.7 - 0.4 * black", 
+                dist = "binary")
+defC <- defData(defC, varname = "hyp", 
+                formula = "hyp_0 * (ACE==0) + hyp_1 * (ACE==1)", 
+                dist = "nonrandom")
+
+defC
+```
+
+```{r}
+set.seed(2017)
+
+dtC <- genData(n = 2000000, defC)
+dtC[1:10]
+```
+
+```{r, message=FALSE, warning=FALSE, fig.width = 3.25}
+p0FULL <- plotDens(dtC, "hyp_0", "black", "Potential outcome", "Full\npopulation",
+                   c(86, .24, 98, .22, 81, .06), c("not black", "black"))
+p1FULL <- plotDens(dtC, "hyp_1", "black", "Potential outcome", "Full\npopulation")
+
+grid.arrange(p0FULL, p1FULL)
+```
+
+#### Marginal distribution of potential outcome changes as distribution of race changes
+
+```{r}
+defC <- updateDef(defC, changevar = "black", newformula = 0.50)
+defC
+```
+
+```{r, warning=FALSE, message=FALSE, fig.width = 3.25}
+set.seed(2017)
+dtC <- genData(n = 2000000, defC)
+
+p0FULL <- plotDens(dtC, "hyp_0", "black", "Potential outcome", "Full\npopulation")
+p1FULL <- plotDens(dtC, "hyp_1", "black","Potential outcome", "Full\npopulation")
+
+grid.arrange(p0FULL, p1FULL)
+```
+
+#### Compare potential outcomes with observed outcomes
+
+```{r message=FALSE, warning=FALSE, fig.width = 3.5}
+pUnexp <- plotDens(dtC[ACE==0], "hyp", "black","Observed", "No ACE\nonly")
+grid.arrange(p0FULL, pUnexp)
+```
+
+#### Biases estimating treatment effects
+
+```{r message=FALSE, warning=FALSE, fig.width = 6}
+grid.arrange(plotDens(dtC, "hyp_0", "black","Potential outcome", "Population", 
+                   c(85, .24, 98, .22, 81, .06), c("not black", "black")),
+             plotDens(dtC[ACE==0], "hyp", "black","Observed", "No ACE"),
+             plotDens(dtC, "hyp_1", "black","Potential outcome", "Population"),
+             plotDens(dtC[ACE==1], "hyp", "black","Observed", "ACE"),
+             nrow = 2
+)
+```
+
+#### Distribution of race in total population
+
+```{r}
+dtC[, .(propLis1 = mean(black))]
+```
+
+#### Distribution of race in each treatment group
+
+```{r}
+dtC[, .(propLis1 = mean(black)), keyby = ACE]
+```
+
+#### When treatment is independent of the confounder
+
+```{r}
+defC <- updateDef(defC, "ACE", newformula = 0.4) # change data generation
+dtC <- genData(n = 2000000, defC)
+
+dtC[, .(propLis1 = mean(black))]            # population/marginal props
+```
+
+```{r}
+dtC[, .(propLis1 = mean(black)), keyby = ACE] # subgroup proportions
+```
+
+```{r, message=FALSE, warning=FALSE, fig.width = 6}
+grid.arrange(plotDens(dtC, "hyp_0", "black","Potential outcome", "Population", 
+                   c(85, .24, 98, .22, 81, .06), c("not black", "black")),
+             plotDens(dtC[ACE==0], "hyp", "black","Observed", "No ACE"),
+             plotDens(dtC, "hyp_1", "black","Potential outcome", "Population"),
+             plotDens(dtC[ACE==1], "hyp", "black","Observed", "ACE"),
+             nrow = 2
+)
+```
+
+<!-- Go to slides -->
+
+### Experimental
+
+```{r}
+
+# generate correlated data
+
+raceSES <- 0.9
+raceStress <- 0.8
+sesStress <- 0.8
+
+corMat <- matrix(c(1, raceSES, raceStress, 
+                   raceSES, 1, sesStress, 
+                   raceStress, sesStress, 1), nrow = 3)
+
+def <- defData(varname = "black", formula = 0.3, dist = "binary")
+def <- defData(def, varname = "sesLow", formula = 0.3, dist = "binary")
+def <- defData(def, varname = "stress", formula = "-0.5;0.5", dist = "uniform")
+
+set.seed(223984)
+dT <- genCorFlex(300, def, corMatrix = corMat) # vary tau 0.1, .5, .8
+
+dT[, cbind(black, sesLow, stress)] %>% cor()
+```
+
+
+```{r}
+defA <- defCondition(condition = "sesLow == 0", 
+                     formula = "81 + 1*stress",
+                     variance = 3, dist = "normal")
+
+defA <- defCondition(defA, condition = "sesLow == 1", 
+                     formula = "83 + 10*stress",
+                     variance = 3, dist = "normal")
+
+dt <- addCondition(defA, dT, newvar = "hyp")
+dt
+```
+
+
+```{r}
+pall <- ggplot(data = dt, aes(x = stress, y = hyp)) +
+  geom_point()+
+  ylim(70, 95) +
+  theme(panel.grid.minor = element_blank())
+
+pall
+```
+
+```{r}
+pall <- ggplot(data = dt, aes(x = stress, y = hyp)) +
+  geom_point(aes(color = factor(black))) +
+  scale_color_manual(values = c("#bfba10", "#6210bf"), name = "black") +
+  ylim(70, 95) +
+  theme(panel.grid.minor = element_blank())
+
+pall
+```
+
+```{r}
+prace <- ggplot(data = dt, aes(x = stress, y = hyp)) +
+  geom_point(aes(color = factor(sesLow))) +
+  scale_color_manual(values = c("#106dbf", "#bf106d"), name = "sesLow") +
+  ylim(70, 95) +
+  facet_grid(. ~ factor(black, labels=c("not black", "black"))) +
+  theme(panel.grid.minor = element_blank())
+
+prace
+```
+
+### Disparities research
+
+```{r}
+tidy(lm(hyp ~ black, data = dt))
+```
+
+### Further exploration
+
+```{r}
+tidy(lmfit <- lm(hyp ~ black + stress, data = dt))
+```
+
+```{r}
+dt[, pred := predict(lmfit)]
+
+pall + 
+  geom_line(aes(x=stress, y=pred, group = black, color = factor(black)), size = 1)
+
+```
+
+```{r}
+lmfit <- lm(hyp ~ black * stress, data = dt)
+dt[, pred := predict(lmfit)]
+
+pall + 
+  geom_line(aes(x=stress, y=pred, group = black, color = factor(black)), size = 1)
+```
+
+```{r}
+tidy(lmfit)
+```
+
+```{r}
+prace + 
+  geom_line(aes(x=stress, y=pred, group = black), color = "black", size = 1)
+```
+
+```{r}
+lmfit <- lm(hyp ~ stress, data = dt[black == 1])
+dt[black == 1 , pred2 := predict(lmfit)]
+
+prace + 
+  geom_line(aes(x=stress, y=pred, group = black), color = "black", size = 1) +
+  geom_line(aes(x=stress, y=pred2, group = black), color = "darkgreen", size = 1) 
+
+```
+
+```{r}
+tidy(lm(hyp ~ black + stress * sesLow, data = dt))
+```
+
+
+### No correlation
+
+```{r}
+
+# generate correlated data
+
+raceSES <- 0.05
+raceStress <- 0.05
+sesStress <- 0.05
+
+corMat <- matrix(c(1, raceSES, raceStress, 
+                   raceSES, 1, sesStress, 
+                   raceStress, sesStress, 1), nrow = 3)
+
+def <- defData(varname = "black", formula = 0.3, dist = "binary")
+def <- defData(def, varname = "sesLow", formula = 0.3, dist = "binary")
+def <- defData(def, varname = "stress", formula = "-0.5;0.5", dist = "uniform")
+
+set.seed(223984)
+dT <- genCorFlex(300, def, corMatrix = corMat) # vary tau 0.1, .5, .8
+
+dT[, cbind(black, sesLow, stress)] %>% cor()
+```
+
+
+```{r}
+defA <- defCondition(condition = "sesLow == 0", 
+                     formula = "81 + 1*stress",
+                     variance = 3, dist = "normal")
+
+defA <- defCondition(defA, condition = "sesLow == 1", 
+                     formula = "83 + 10*stress",
+                     variance = 3, dist = "normal")
+
+dt <- addCondition(defA, dT, newvar = "hyp")
+dt
+```
+
+
+```{r}
+pall <- ggplot(data = dt, aes(x = stress, y = hyp)) +
+  geom_point()+
+  ylim(70, 95) +
+  theme(panel.grid.minor = element_blank())
+
+pall
+```
+
+```{r}
+pall <- ggplot(data = dt, aes(x = stress, y = hyp)) +
+  geom_point(aes(color = factor(black))) +
+  scale_color_manual(values = c("#bfba10", "#6210bf"), name = "black") +
+  ylim(70, 95) +
+  theme(panel.grid.minor = element_blank())
+
+pall
+```
+
+```{r}
+prace <- ggplot(data = dt, aes(x = stress, y = hyp)) +
+  geom_point(aes(color = factor(sesLow))) +
+  scale_color_manual(values = c("#106dbf", "#bf106d"), name = "sesLow") +
+  ylim(70, 95) +
+  facet_grid(. ~ factor(black, labels=c("not black", "black"))) +
+  theme(panel.grid.minor = element_blank())
+
+prace
+```
+
+### Disparities research
+
+```{r}
+tidy(lm(hyp ~ black, data = dt))
+```
+
+### Further exploration
+
+```{r}
+tidy(lmfit <- lm(hyp ~ black + stress, data = dt))
+```
+
+```{r}
+dt[, pred := predict(lmfit)]
+
+pall + 
+  geom_line(aes(x=stress, y=pred, group = black, color = factor(black)), size = 1)
+
+```
+
+```{r}
+lmfit <- lm(hyp ~ black * stress, data = dt)
+dt[, pred := predict(lmfit)]
+
+pall + 
+  geom_line(aes(x=stress, y=pred, group = black, color = factor(black)), size = 1)
+```
+
+```{r}
+tidy(lmfit)
+```
+
+```{r}
+prace + 
+  geom_line(aes(x=stress, y=pred, group = black), color = "black", size = 1)
+```
+
+```{r}
+lmfit <- lm(hyp ~ stress, data = dt[black == 1])
+dt[black == 1 , pred2 := predict(lmfit)]
+
+prace + 
+  geom_line(aes(x=stress, y=pred, group = black), color = "black", size = 1) +
+  geom_line(aes(x=stress, y=pred2, group = black), color = "darkgreen", size = 1) 
+
+```
+
+```{r}
+tidy(lm(hyp ~ black + stress * sesLow, data = dt))
+```
+
