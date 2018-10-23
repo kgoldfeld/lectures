@@ -1,0 +1,131 @@
+---
+title: "Simple Mediation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+M0 & M1 are highly correlated, though P(M1) > P(M0)
+
+```{r}
+library(simstudy)
+
+set.seed(11)
+
+dd <- genCorGen(n=10000, nvars = 2,  params1 = c(.2, .6), dist = "binary", 
+                rho = .3, corstr = "cs", wide = TRUE, cnames = c("M0", "M1"))
+dd <- trtObserve(dd, 0.6, grpName = "rx")
+dd
+```
+
+# Y0M0 is a function of M0
+
+```{r}
+def <- defDataAdd(varname = "Y0M0", formula = "5 + M0*2", 
+                  variance = 1, dist = "normal")
+def <- defDataAdd(def, varname = "xY0M1", formula = "5 + M1*2", 
+                  variance = 1, dist = "normal")
+def <- defDataAdd(def, varname = "Y0M1", 
+                  formula = "(M0 == M1) * Y0M0 + (M0 != M1) * xY0M1", 
+                  dist = "nonrandom")
+
+def <- defDataAdd(def, varname = "Y1M0", formula = "10 + M0*5", 
+                  variance = 1, dist = "normal")
+def <- defDataAdd(def, varname = "xY1M1", formula = "10 + M1*5", 
+                  variance = 1, dist = "normal")
+def <- defDataAdd(def, varname = "Y1M1", 
+                  formula = "(M0 == M1) * Y1M0 + (M0 != M1) * xY1M1", 
+                  dist = "nonrandom")
+
+def <- defDataAdd(def, varname = "M", formula = "(rx==0) * M0 + (rx==1) * M1", dist = "nonrandom")
+def <- defDataAdd(def, varname = "Y", formula = "(rx==0) * Y0M0 + (rx==1) * Y1M1", dist = "nonrandom")
+
+def
+```
+
+```{r}
+dd <- addColumns(def, dd)
+dd <- delColumns(dd, c("xY0M1", "xY1M1"))
+dd
+```
+
+Plot
+
+```{r}
+means <- dd[, .(Y0M0 = mean(Y0M0),
+       Y0M1 = mean(Y0M1),
+       Y1M0 = mean(Y1M0),
+       Y1M1 = mean(Y1M1))]
+
+m <- unlist(means)
+
+dm <- data.table(var = names(means), avg = m)
+
+dlCME <- data.table(y = c(m[1], m[1], m[3], m[3]), yend = m,
+                    x = 1:4, xend = c(2, 2, 4, 4),
+                    grp = c(0, 0, 1, 1))
+
+dlNDE <- data.table(y = c(m[2], m[4], m[1], m[3]), yend = c(m[4], m[4], m[3], m[3]),
+                    x = c(2, 2, 1, 1), xend = c(2, 4, 1, 3), 
+                    grp = c(0, 0, 1, 1))
+
+
+ggplot(data = dm, aes(x = var, y = avg)) +
+  geom_point(size = 3) +
+  scale_y_continuous(limits = c(0, ceiling(max(dm$avg))), breaks = 0:ceiling(max(dm$avg))) +
+  geom_segment(data = dlCME, aes(x=x, xend = xend, y=y, yend = yend, color = factor(grp)), size = .8) +
+  geom_segment(data = dlNDE, aes(x=x, xend = xend, y=y, yend = yend, color = factor(grp)), lty = 2) +
+  theme(panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        legend.position = "none",
+        axis.title.x = element_blank()) +
+  scale_color_manual(values =  c("#4477AA", "#CC6677"))
+```
+
+# True causal effects based on potential outcomes
+
+```{r}
+CME0 <- dd[, mean(Y0M1 - Y0M0)] 
+CME1 <- dd[, mean(Y1M1 - Y1M0)] 
+CDE0 <- dd[, mean(Y1M0 - Y0M0)] 
+CDE1 <- dd[, mean(Y1M1 - Y0M1)] 
+
+data.table(CME0, CME1, CDE0, CDE1)
+```
+
+Estimated causal mediation effect
+
+```{r}
+# rx = 0
+
+eCME0 <- dd[M == 0 & rx == 0, mean(Y)] * (dd[rx == 1, mean(M == 0)] - dd[rx == 0, mean(M == 0)]) +
+         dd[M == 1 & rx == 0, mean(Y)] * (dd[rx == 1, mean(M == 1)] - dd[rx == 0, mean(M == 1)])
+
+eCME1 <- dd[M == 0 & rx == 1, mean(Y)] * (dd[rx == 1, mean(M == 0)] - dd[rx == 0, mean(M == 0)]) +
+         dd[M == 1 & rx == 1, mean(Y)] * (dd[rx == 1, mean(M == 1)] - dd[rx == 0, mean(M == 1)])
+
+
+eCDE0 <- (dd[M == 0 & rx == 1, mean(Y)] -  dd[M == 0 & rx == 0, mean(Y)]) * dd[rx == 0, mean(M == 0)] +
+         (dd[M == 1 & rx == 1, mean(Y)] -  dd[M == 1 & rx == 0, mean(Y)]) * dd[rx == 0, mean(M == 1)]
+
+eCDE1 <- (dd[M == 0 & rx == 1, mean(Y)] -  dd[M == 0 & rx == 0, mean(Y)]) * dd[rx == 1, mean(M == 0)] +
+         (dd[M == 1 & rx == 1, mean(Y)] -  dd[M == 1 & rx == 0, mean(Y)]) * dd[rx == 1, mean(M == 1)]
+
+data.table(eCME0, eCME1, eCDE0, eCDE1)
+```
+
+```{r}
+### Use package mediation
+
+library(mediation)
+
+med.fit <- glm(M ~ rx, data = dd, family = binomial("logit"))
+out.fit <- lm(Y ~ M*rx, data = dd)
+
+med.out <- mediate(med.fit, out.fit, treat = "rx", mediator = "M",
+                   robustSE = TRUE, sims = 1000)
+summary(med.out)
+```
+

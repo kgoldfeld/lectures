@@ -1,0 +1,13 @@
+varname,formula,variance,dist,link
+M0,0.3,0,binary,identity
+xM1,0.6,0,binary,identity
+M1, (xM1 < M0) * M0 + (xM1 >= M0) * xM1,0,nonrandom,identity
+Y0M0,-2 + M0*1,0,binary,logit
+xY0M1,-2 + M1*1,0,binary,logit
+Y0M1,(M0 == M1) * Y0M0 + (M0 != M1) * xY0M1,0,nonrandom,identity
+Y1M0,0 + M0*1.5,0,binary,logit
+xY1M1,0 + M1*1.5,0,binary,logit
+Y1M1,(M0 == M1) * Y1M0 + (M0 != M1) * xY1M1,0,nonrandom,identity
+rx,0.5,0,binary,identity
+M,(rx==0) * M0 + (rx==1) * M1,0,nonrandom,identity
+Y,(rx==0) * Y0M0 + (rx==1) * Y1M1,0,nonrandom,identity
