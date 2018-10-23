@@ -1,0 +1,146 @@
+---
+title: "Simple Mediation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+def <- defRead("ConfMed.csv")
+def
+```
+
+```{r}
+set.seed(11)
+dd <- genData(10000, def)
+dd <- delColumns(dd, c("xM1", "xY0M1", "xY1M1"))
+
+dd
+
+```
+
+```{r}
+means <- dd[, .(Y0M0 = mean(Y0M0),
+       Y0M1 = mean(Y0M1),
+       Y1M0 = mean(Y1M0),
+       Y1M1 = mean(Y1M1))]
+
+m <- unlist(means)
+
+dm <- data.table(var = names(means), avg = m)
+
+dlCME <- data.table(y = c(m[1], m[1], m[3], m[3]), yend = m,
+                    x = 1:4, xend = c(2, 2, 4, 4),
+                    grp = c(0, 0, 1, 1))
+
+dlNDE <- data.table(y = c(m[2], m[4], m[1], m[3]), yend = c(m[4], m[4], m[3], m[3]),
+                    x = c(2, 2, 1, 1), xend = c(2, 4, 1, 3), 
+                    grp = c(0, 0, 1, 1))
+
+
+ggplot(data = dm, aes(x = var, y = avg)) +
+  geom_point(size = 3) +
+  scale_y_continuous(limits = c(0, ceiling(max(dm$avg))), breaks = 0:ceiling(max(dm$avg))) +
+  geom_segment(data = dlCME, aes(x=x, xend = xend, y=y, yend = yend, color = factor(grp)), size = .8) +
+  geom_segment(data = dlNDE, aes(x=x, xend = xend, y=y, yend = yend, color = factor(grp)), lty = 2) +
+  theme(panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        legend.position = "none",
+        axis.title.x = element_blank()) +
+  scale_color_manual(values =  c("#4477AA", "#CC6677"))
+```
+
+True causal effects based on potential outcomes
+
+```{r}
+
+CME0 <- dd[, mean(Y0M1 - Y0M0)] # CME rx = 0
+CME1 <- dd[, mean(Y1M1 - Y1M0)] # CME rx = 1
+
+CDE0 <- dd[, mean(Y1M0 - Y0M0)] # CDE rx = 0
+CDE1 <- dd[, mean(Y1M1 - Y0M1)] # CDE rx = 1
+
+TCE <- dd[, mean(Y1M1 - Y0M0)] # TCE
+
+data.table(CME0, CME1, CDE0, CDE1, TCE)
+```
+
+Estimated causal mediation effect - biased
+
+```{r}
+bCME0 <-
+  dd[M == 0 & rx == 0, mean(Y)] * (dd[rx == 1, mean(M == 0)] - dd[rx == 0, mean(M == 0)]) +
+  dd[M == 1 & rx == 0, mean(Y)] * (dd[rx == 1, mean(M == 1)] - dd[rx == 0, mean(M == 1)])
+
+bCME1 <-
+  dd[M == 0 & rx == 1, mean(Y)] * (dd[rx == 1, mean(M == 0)] - dd[rx == 0, mean(M == 0)]) +
+  dd[M == 1 & rx == 1, mean(Y)] * (dd[rx == 1, mean(M == 1)] - dd[rx == 0, mean(M == 1)])
+
+bCDE0 <-
+  (dd[M == 0 & rx == 1, mean(Y)] -  dd[M == 0 & rx == 0, mean(Y)]) * dd[rx == 0, mean(M == 0)] +
+  (dd[M == 1 & rx == 1, mean(Y)] -  dd[M == 1 & rx == 0, mean(Y)]) * dd[rx == 0, mean(M == 1)]
+
+bCDE1 <-
+  (dd[M == 0 & rx == 1, mean(Y)] -  dd[M == 0 & rx == 0, mean(Y)]) * dd[rx == 1, mean(M == 0)] +
+  (dd[M == 1 & rx == 1, mean(Y)] -  dd[M == 1 & rx == 0, mean(Y)]) * dd[rx == 1, mean(M == 1)]
+
+data.table(bCME0, bCME1, bCDE0, bCDE1)
+
+```
+
+### Estimated causal mediation effect - unbiased
+
+```{r}
+
+uCME0 <-
+dd[M==0 & rx==0 & x==0, mean(Y)] * (dd[rx==1 & x==0, mean(M==0)] - dd[rx==0 & x==0, mean(M==0)]) * dd[, mean(x==0)] +
+  dd[M==1 & rx==0 & x==0, mean(Y)] * (dd[rx==1 & x==0, mean(M==1)] - dd[rx== 0 & x==0, mean(M==1)]) * dd[, mean(x==0)] +
+  dd[M==0 & rx==0 & x==1, mean(Y)] * (dd[rx==1 & x==1, mean(M==0)] - dd[rx== 0 & x==1, mean(M==0)]) * dd[, mean(x==1)] +
+  dd[M==1 & rx==0 & x==1, mean(Y)] * (dd[rx==1 & x==1, mean(M==1)] - dd[rx== 0 & x==1, mean(M==1)]) * dd[, mean(x==1)]
+
+uCME1 <-
+dd[M==0 & rx==1 & x==0, mean(Y)] * (dd[rx==1 & x==0, mean(M==0)] - dd[rx==0 & x==0, mean(M==0)]) * dd[, mean(x==0)] +
+  dd[M==1 & rx==1 & x==0, mean(Y)] * (dd[rx==1 & x==0, mean(M==1)] - dd[rx== 0 & x==0, mean(M==1)]) * dd[, mean(x==0)] +
+  dd[M==0 & rx==1 & x==1, mean(Y)] * (dd[rx==1 & x==1, mean(M==0)] - dd[rx== 0 & x==1, mean(M==0)]) * dd[, mean(x==1)] +
+  dd[M==1 & rx==1 & x==1, mean(Y)] * (dd[rx==1 & x==1, mean(M==1)] - dd[rx== 0 & x==1, mean(M==1)]) * dd[, mean(x==1)]
+
+uCDE0 <-
+(dd[M==0 & rx==1 & x==0, mean(Y)] -  dd[M==0 & rx==0 & x==0, mean(Y)]) * dd[rx==0 & x==0, mean(M==0)] * dd[, mean(x==0)] +
+  (dd[M==1 & rx==1 & x==0, mean(Y)] -  dd[M==1 & rx==0 & x==0, mean(Y)]) * dd[rx==0 & x==0, mean(M==1)] * dd[, mean(x==0)] +
+  (dd[M==0 & rx==1 & x==1, mean(Y)] -  dd[M==0 & rx==0 & x==1, mean(Y)]) * dd[rx==0 & x==1, mean(M==0)] * dd[, mean(x==1)] +
+  (dd[M==1 & rx==1 & x==1, mean(Y)] -  dd[M==1 & rx==0 & x==1, mean(Y)]) * dd[rx==0 & x==1, mean(M==1)] * dd[, mean(x==1)]
+
+uCDE1 <- 
+(dd[M==0 & rx==1 & x==0, mean(Y)] -  dd[M==0 & rx==0 & x==0, mean(Y)]) * dd[rx==1 & x==0, mean(M==0)] * dd[, mean(x==0)] +
+  (dd[M==1 & rx==1 & x==0, mean(Y)] -  dd[M==1 & rx==0 & x==0, mean(Y)]) * dd[rx==1 & x==0, mean(M==1)] * dd[, mean(x==0)] +
+  (dd[M==0 & rx==1 & x==1, mean(Y)] -  dd[M==0 & rx==0 & x==1, mean(Y)]) * dd[rx==1 & x==1, mean(M==0)] * dd[, mean(x==1)] +
+  (dd[M==1 & rx==1 & x==1, mean(Y)] -  dd[M==1 & rx==0 & x==1, mean(Y)]) * dd[rx==1 & x==1, mean(M==1)] * dd[, mean(x==1)]
+
+data.table(uCME0, uCME1, uCDE0, uCDE1)
+```
+
+Use package mediation
+
+```{r}
+library(mediation)
+
+med.fit <- glm(M ~ rx, data = dd, family = binomial("logit"))
+out.fit <- lm(Y ~ M*rx, data = dd)
+
+med.out1 <- mediate(med.fit, out.fit, treat = "rx", mediator = "M",
+                   robustSE = TRUE, sims = 1000)
+summary(med.out1)
+```
+
+Adjusting for confounder x
+
+```{r}
+med.fit <- glm(M ~ rx + x, data = dd, family = binomial("logit"))
+out.fit <- lm(Y ~ M*rx + x, data = dd)
+
+med.out2 <- mediate(med.fit, out.fit, treat = "rx", mediator = "M",
+                   robustSE = TRUE, sims = 1000)
+summary(med.out2)
+```
